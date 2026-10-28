@@ -1,0 +1,455 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Ward Monitor</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* Layout: summary strip on top, bed cards left, alert log right (stacked on phones), room sensors under the beds. */
+  :root {
+    --bg: #f1f5f4;
+    --surface: #ffffff;
+    --fg: #13211f;
+    --muted: #586a67;
+    --line: #d9e3e1;
+    --accent: #0f766e;
+    --ok: #17703f;
+    --ok-bg: #e0f3e8;
+    --warn: #8f5a00;
+    --warn-bg: #fff0d1;
+    --crit: #b3261e;
+    --crit-bg: #fde3e0;
+    --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-num: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d1514;
+      --surface: #142120;
+      --fg: #e5eeed;
+      --muted: #94a7a4;
+      --line: #24373a;
+      --accent: #4fd1c0;
+      --ok: #62d394;
+      --ok-bg: #11321f;
+      --warn: #f1bb52;
+      --warn-bg: #3a2b0b;
+      --crit: #ff8f83;
+      --crit-bg: #451b18;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1514;
+    --surface: #142120;
+    --fg: #e5eeed;
+    --muted: #94a7a4;
+    --line: #24373a;
+    --accent: #4fd1c0;
+    --ok: #62d394;
+    --ok-bg: #11321f;
+    --warn: #f1bb52;
+    --warn-bg: #3a2b0b;
+    --crit: #ff8f83;
+    --crit-bg: #451b18;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.45;
+    padding-block: 20px 32px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; display: grid; gap: 16px; }
+  h1, h2 { margin: 0; text-wrap: balance; }
+  button { font: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* Header */
+  .top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+  .top h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+  .top .sub { color: var(--muted); font-size: 13px; }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .clock { font-family: var(--font-num); font-size: 15px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .live i { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+  .live.paused i { background: var(--muted); }
+  .btn {
+    border: 1px solid var(--line); background: var(--surface); color: var(--fg);
+    padding: 7px 12px; border-radius: 8px; cursor: pointer; font-weight: 500;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+
+  /* Summary */
+  .summary {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  }
+  .stat { padding: 12px 16px; min-width: 0; }
+  .stat + .stat { border-left: 1px solid var(--line); }
+  .stat .n { font-family: var(--font-num); font-size: 28px; font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .stat .l { font-size: 12px; color: var(--muted); }
+  .n.ok { color: var(--ok); } .n.warn { color: var(--warn); } .n.crit { color: var(--crit); }
+
+  /* Main layout */
+  .main {
+    display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "alerts" "beds" "env";
+  }
+  .alerts { grid-area: alerts; }
+  .beds { grid-area: beds; }
+  .env { grid-area: env; }
+  @media (min-width: 980px) {
+    .main {
+      grid-template-columns: minmax(0, 1fr) 320px;
+      grid-template-areas: "beds alerts" "env alerts";
+      align-items: start;
+    }
+    .alerts { position: sticky; top: 16px; }
+  }
+
+  .sec-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .sec-title h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .sec-title span { font-size: 12px; color: var(--muted); }
+
+  /* Bed cards */
+  .bed-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+  .bed {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px; min-width: 0; display: grid; gap: 12px;
+  }
+  .bed.l2 { border-color: var(--crit); }
+  .bed.l1 { border-color: var(--warn); }
+  .bed-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .bed-name { font-weight: 600; font-size: 15px; }
+  .bed-id { font-family: var(--font-num); font-size: 12px; color: var(--muted); }
+  .pill {
+    display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap;
+  }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); }
+  .pill.warn { background: var(--warn-bg); color: var(--warn); }
+  .pill.crit { background: var(--crit-bg); color: var(--crit); }
+  .vitals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .v .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .v .val { font-family: var(--font-num); font-size: 24px; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
+  .v .u { font-family: var(--font-body); font-size: 11px; font-weight: 400; color: var(--muted); margin-left: 2px; }
+  .v.l1 .val { color: var(--warn); }
+  .v.l2 .val { color: var(--crit); }
+  .trend .cap { font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+  .sw { position: relative; margin-right: 5px; }
+  .sw svg { display: block; width: 100%; height: 34px; }
+  .sw .dot { position: absolute; width: 7px; height: 7px; border-radius: 50%; background: currentColor; transform: translate(-50%, -50%); }
+  .tone0 { color: var(--accent); } .tone1 { color: var(--warn); } .tone2 { color: var(--crit); }
+
+  /* Alerts */
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  .alert-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; max-height: 520px; overflow-y: auto; }
+  .alert-list li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .alert-list li:first-child { border-top: 0; padding-top: 0; }
+  .alert-list time { font-family: var(--font-num); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 2px; }
+  .alert-list .who { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-weight: 600; }
+  .alert-list .msg { grid-column: 2; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  .empty { color: var(--muted); font-size: 13px; margin: 0; }
+
+  /* Room sensors */
+  .env-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+  .sensor { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; gap: 4px; min-width: 0; }
+  .sensor .where { font-size: 12px; color: var(--muted); }
+  .sensor .what { font-weight: 500; }
+  .sensor .val { font-family: var(--font-num); font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .sensor .range { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .sensor.l2 { border-color: var(--crit); }
+
+  .foot { color: var(--muted); font-size: 12px; display: grid; gap: 4px; }
+  .foot p { margin: 0; max-width: 90ch; }
+
+  @media (max-width: 560px) {
+    .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .stat:nth-child(3) { border-left: 0; }
+    .stat:nth-child(n + 3) { border-top: 1px solid var(--line); }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .bed, .sensor { transition: border-color 0.3s; }
+  }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Ward A Monitor</h1>
+      <div class="sub">8 beds · 4 room sensors · readings update every 2 seconds</div>
+    </div>
+    <div class="controls">
+      <span class="live" id="live"><i></i><span id="liveText">Live</span></span>
+      <span class="clock" id="clock">--:--:--</span>
+      <button class="btn" id="testBtn" type="button">Test alert</button>
+      <button class="btn primary" id="pauseBtn" type="button">Pause</button>
+    </div>
+  </header>
+
+  <section class="summary" id="summary" aria-label="Ward summary"></section>
+
+  <div class="main">
+    <section class="alerts panel" aria-label="Alerts">
+      <div class="sec-title"><h2>Alerts</h2><span id="alertCount"></span></div>
+      <ul class="alert-list" id="alertList"></ul>
+    </section>
+
+    <section class="beds" aria-label="Patient beds">
+      <div class="sec-title"><h2>Beds</h2><span>Heart rate trend covers the last 60 seconds</span></div>
+      <div class="bed-grid" id="beds"></div>
+    </section>
+
+    <section class="env" aria-label="Room sensors">
+      <div class="sec-title"><h2>Rooms and storage</h2></div>
+      <div class="env-grid" id="env"></div>
+    </section>
+  </div>
+
+  <footer class="foot">
+    <p id="limits"></p>
+    <p>All readings are simulated in your browser. Bed labels and patient IDs are made up, so no real patient data is shown.</p>
+  </footer>
+</div>
+
+<script>
+(function () {
+  var N = 30;                  // points kept for the trend (30 x 2 s = 60 s)
+  var TICK_MS = 2000;
+
+  // Alert limits. Outside "warn" = Warning, outside "crit" = Critical.
+  var LIMITS = {
+    hr:   { label: 'Heart rate', unit: ' bpm', warn: [55, 100],  crit: [45, 120],  dec: 0 },
+    spo2: { label: 'SpO₂',  unit: '%',    warn: [95, 101],  crit: [92, 101],  dec: 0 },
+    temp: { label: 'Temp',       unit: '°C', warn: [36.0, 37.8], crit: [35.0, 38.5], dec: 1 }
+  };
+  var LEVEL_NAME = ['Stable', 'Warning', 'Critical'];
+  var LEVEL_CLASS = ['ok', 'warn', 'crit'];
+
+  function rnd(a, b) { return a + Math.random() * (b - a); }
+  function clamp(v, a, b) { return Math.min(b, Math.max(a, v)); }
+  function fmt(k, v) { return v.toFixed(LIMITS[k].dec); }
+  function level(k, v) {
+    var L = LIMITS[k];
+    if (v < L.crit[0] || v > L.crit[1]) return 2;
+    if (v < L.warn[0] || v > L.warn[1]) return 1;
+    return 0;
+  }
+
+  // Beds: anonymised IDs, each with its own resting values.
+  var beds = [
+    { name: 'Bed 1', pid: 'P-1042', base: { hr: 72, spo2: 98, temp: 36.7 } },
+    { name: 'Bed 2', pid: 'P-1057', base: { hr: 80, spo2: 97, temp: 36.9 } },
+    { name: 'Bed 3', pid: 'P-1063', base: { hr: 66, spo2: 98, temp: 36.6 } },
+    { name: 'Bed 4', pid: 'P-1071', base: { hr: 88, spo2: 96, temp: 37.0 } },
+    { name: 'Bed 5', pid: 'P-1078', base: { hr: 74, spo2: 99, temp: 36.8 } },
+    { name: 'Bed 6', pid: 'P-1084', base: { hr: 78, spo2: 97, temp: 36.7 } },
+    { name: 'Bed 7', pid: 'P-1090', base: { hr: 69, spo2: 98, temp: 36.5 } },
+    { name: 'Bed 8', pid: 'P-1096', base: { hr: 84, spo2: 96, temp: 37.1 } }
+  ];
+  beds.forEach(function (b) {
+    b.hr = b.base.hr; b.spo2 = b.base.spo2; b.temp = b.base.temp;
+    b.hist = []; b.ev = null; b.lvl = 0;
+  });
+
+  var env = [
+    { where: 'Ward A',         what: 'Temperature', unit: '°C', val: 24.2, base: 24.0, lo: 22, hi: 26, n: 0.10, dec: 1 },
+    { where: 'Ward A',         what: 'Humidity',    unit: '%',       val: 52,   base: 52,   lo: 40, hi: 60, n: 0.7,  dec: 0 },
+    { where: 'ICU',            what: 'Temperature', unit: '°C', val: 22.4, base: 22.5, lo: 20, hi: 24, n: 0.10, dec: 1 },
+    { where: 'Medicine store', what: 'Fridge',      unit: '°C', val: 4.6,  base: 4.5,  lo: 2,  hi: 8,  n: 0.12, dec: 1 }
+  ];
+
+  var alerts = [];
+  var alertTotal = 0;
+  var timer = null;
+
+  function worst(b) {
+    var best = { k: 'hr', lvl: 0 };
+    ['hr', 'spo2', 'temp'].forEach(function (k) {
+      var l = level(k, b[k]);
+      if (l > best.lvl) best = { k: k, lvl: l };
+    });
+    return best;
+  }
+
+  function describe(b, k, lvl) {
+    var L = LIMITS[k];
+    var tier = lvl === 2 ? L.crit : L.warn;
+    var v = b[k];
+    var dir = v < tier[0] ? 'below ' + tier[0] : 'above ' + tier[1];
+    return L.label + ' ' + fmt(k, v) + L.unit + ', ' + dir;
+  }
+
+  function stepBed(b) {
+    if (b.ev) { b.ev.t--; if (b.ev.t <= 0) b.ev = null; }
+    var t = { hr: b.base.hr, spo2: b.base.spo2, temp: b.base.temp };
+    if (b.ev) t[b.ev.k] = b.ev.target;
+    b.hr   = clamp(b.hr   + (t.hr   - b.hr)   * 0.30 + rnd(-1.6, 1.6),   35, 170);
+    b.spo2 = clamp(b.spo2 + (t.spo2 - b.spo2) * 0.30 + rnd(-0.4, 0.4),   80, 100);
+    b.temp = clamp(b.temp + (t.temp - b.temp) * 0.15 + rnd(-0.03, 0.03), 34, 41);
+    b.hist.push(b.hr);
+    if (b.hist.length > N) b.hist.shift();
+  }
+
+  function maybeStartEvent(b) {
+    if (b.ev || Math.random() > 0.006) return;
+    var kind = Math.floor(Math.random() * 3);
+    if (kind === 0) b.ev = { k: 'spo2', target: rnd(88, 93.5), t: Math.round(rnd(10, 20)) };
+    else if (kind === 1) b.ev = { k: 'hr', target: rnd(108, 132), t: Math.round(rnd(10, 20)) };
+    else b.ev = { k: 'temp', target: rnd(38.0, 39.2), t: Math.round(rnd(12, 22)) };
+  }
+
+  function stepEnv(s) {
+    s.val = clamp(s.val + (s.base - s.val) * 0.2 + rnd(-s.n, s.n), s.base - 6, s.base + 6);
+  }
+
+  function stamp() {
+    return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  function checkAlerts(b, quiet) {
+    var w = worst(b);
+    if (w.lvl > b.lvl && w.lvl >= 1) {
+      alertTotal++;
+      alerts.unshift({ time: stamp(), bed: b.name, lvl: w.lvl, msg: describe(b, w.k, w.lvl) });
+    } else if (w.lvl === 0 && b.lvl > 0) {
+      alerts.unshift({ time: stamp(), bed: b.name, lvl: 0, msg: 'Back in the normal range' });
+    }
+    if (alerts.length > 40) alerts.length = 40;
+    b.lvl = w.lvl;
+  }
+
+  function tick(quiet) {
+    beds.forEach(function (b) {
+      if (!quiet) maybeStartEvent(b);
+      stepBed(b);
+      if (quiet) b.lvl = worst(b).lvl; else checkAlerts(b);
+    });
+    env.forEach(stepEnv);
+    render();
+  }
+
+  // ---------- rendering ----------
+  function spark(b, tone) {
+    var W = 120, H = 34, MIN = 40, MAX = 150;
+    var h = b.hist, n = h.length;
+    var pts = h.map(function (v, i) {
+      var x = n > 1 ? (i / (n - 1)) * W : W;
+      var y = H - 3 - ((clamp(v, MIN, MAX) - MIN) / (MAX - MIN)) * (H - 6);
+      return [x, y];
+    });
+    var line = pts.map(function (p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' ');
+    var area = '0,' + H + ' ' + line + ' ' + W + ',' + H;
+    var last = pts[pts.length - 1];
+    var grid = [0.25, 0.5, 0.75].map(function (f) {
+      var y = (H * f).toFixed(1);
+      return '<line x1="0" x2="' + W + '" y1="' + y + '" y2="' + y + '" stroke="var(--line)" stroke-width="1" vector-effect="non-scaling-stroke"/>';
+    }).join('');
+    return '<div class="sw tone' + tone + '"><svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true">' +
+      grid +
+      '<polygon points="' + area + '" fill="currentColor" fill-opacity="0.12"/>' +
+      '<polyline points="' + line + '" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>' +
+      '</svg><span class="dot" style="left:100%;top:' + ((last[1] / H) * 100).toFixed(1) + '%"></span></div>';
+  }
+
+  function vital(b, k) {
+    var L = LIMITS[k];
+    var l = level(k, b[k]);
+    return '<div class="v l' + l + '"><div class="k">' + L.label + '</div>' +
+      '<div class="val">' + fmt(k, b[k]) + '<span class="u">' + L.unit.trim() + '</span></div></div>';
+  }
+
+  function render() {
+    // summary
+    var c = [0, 0, 0];
+    beds.forEach(function (b) { c[b.lvl]++; });
+    document.getElementById('summary').innerHTML =
+      '<div class="stat"><div class="n">' + beds.length + '</div><div class="l">Beds monitored</div></div>' +
+      '<div class="stat"><div class="n ok">' + c[0] + '</div><div class="l">Stable</div></div>' +
+      '<div class="stat"><div class="n warn">' + c[1] + '</div><div class="l">Warning</div></div>' +
+      '<div class="stat"><div class="n crit">' + c[2] + '</div><div class="l">Critical</div></div>';
+
+    // beds
+    document.getElementById('beds').innerHTML = beds.map(function (b) {
+      var hrTone = level('hr', b.hr);
+      return '<article class="bed l' + b.lvl + '">' +
+        '<div class="bed-head"><div><div class="bed-name">' + b.name + '</div><div class="bed-id">' + b.pid + '</div></div>' +
+        '<span class="pill ' + LEVEL_CLASS[b.lvl] + '">' + LEVEL_NAME[b.lvl] + '</span></div>' +
+        '<div class="vitals">' + vital(b, 'hr') + vital(b, 'spo2') + vital(b, 'temp') + '</div>' +
+        '<div class="trend"><div class="cap">Heart rate, last 60 s</div>' + spark(b, hrTone) + '</div>' +
+        '</article>';
+    }).join('');
+
+    // alerts
+    document.getElementById('alertCount').textContent = alertTotal + ' since start';
+    var list = document.getElementById('alertList');
+    if (!alerts.length) {
+      list.innerHTML = '<li><p class="empty">No alerts yet. A bed shows up here when a reading leaves its safe range.</p></li>';
+    } else {
+      list.innerHTML = alerts.slice(0, 12).map(function (a) {
+        return '<li><time>' + a.time + '</time><div class="who">' + a.bed +
+          ' <span class="pill ' + LEVEL_CLASS[a.lvl] + '">' + (a.lvl === 0 ? 'Resolved' : LEVEL_NAME[a.lvl]) + '</span></div>' +
+          '<div class="msg">' + a.msg + '</div></li>';
+      }).join('');
+    }
+
+    // room sensors
+    document.getElementById('env').innerHTML = env.map(function (s) {
+      var out = s.val < s.lo || s.val > s.hi;
+      return '<div class="sensor' + (out ? ' l2' : '') + '"><div class="where">' + s.where + '</div>' +
+        '<div class="what">' + s.what + '</div>' +
+        '<div class="val">' + s.val.toFixed(s.dec) + '<span class="u" style="font-size:12px;font-weight:400;color:var(--muted);margin-left:3px">' + s.unit + '</span></div>' +
+        '<div class="range"><span>Safe ' + s.lo + '–' + s.hi + ' ' + s.unit + '</span>' +
+        '<span class="pill ' + (out ? 'crit' : 'ok') + '">' + (out ? 'Out of range' : 'OK') + '</span></div></div>';
+    }).join('');
+
+    document.getElementById('clock').textContent =
+      new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  function limitText(k, tier) {
+    var L = LIMITS[k], r = L[tier];
+    return r[1] > 100 && k === 'spo2' ? 'below ' + r[0] + L.unit : 'outside ' + r[0] + '–' + r[1] + L.unit;
+  }
+  document.getElementById('limits').innerHTML = '<strong>Alert limits.</strong> ' +
+    ['hr', 'spo2', 'temp'].map(function (k) {
+      return LIMITS[k].label + ': warning ' + limitText(k, 'warn') + ', critical ' + limitText(k, 'crit');
+    }).join(' · ') + '.';
+
+  // ---------- controls ----------
+  function start() { timer = setInterval(function () { tick(false); }, TICK_MS); }
+  function stop() { clearInterval(timer); timer = null; }
+
+  document.getElementById('pauseBtn').addEventListener('click', function () {
+    var live = document.getElementById('live');
+    if (timer) {
+      stop(); this.textContent = 'Resume';
+      live.classList.add('paused'); document.getElementById('liveText').textContent = 'Paused';
+    } else {
+      start(); this.textContent = 'Pause';
+      live.classList.remove('paused'); document.getElementById('liveText').textContent = 'Live';
+    }
+  });
+
+  document.getElementById('testBtn').addEventListener('click', function () {
+    var calm = beds.filter(function (b) { return !b.ev && b.lvl === 0; });
+    var pool = calm.length ? calm : beds;
+    var b = pool[Math.floor(Math.random() * pool.length)];
+    b.ev = { k: 'spo2', target: 88, t: 14 };
+    tick(false);
+  });
+
+  // ---------- opening state: a minute of history, with Bed 6 already running fast ----------
+  for (var i = 0; i < N; i++) tick(true);
+  beds[5].ev = { k: 'hr', target: 128, t: 16 };
+  for (var j = 0; j < 4; j++) tick(false);
+  start();
+})();
+</script>
+
+</body></html>
